@@ -1,14 +1,14 @@
 import os
 import json
 import hashlib
-import anthropic
 import requests
 from datetime import datetime
+from google import genai
 from jobspy import scrape_jobs
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 
@@ -181,7 +181,7 @@ def hard_filter(jobs):
 # ── Step 4: Score with Claude ───────────────────────────────────────────────────
 
 def score_job(client, job):
-    """Send a single JD to Claude for scoring. Returns the job dict with score added."""
+    """Send a single JD to Gemini for scoring. Returns the job dict with score added."""
     description = str(job.get("description", ""))[:3000]  # Truncate very long JDs
     prompt = f"""Score this job posting.
 
@@ -191,13 +191,15 @@ Location: {job.get('location', 'Unknown')}
 Description: {description}"""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=400,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}]
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=400,
+            ),
         )
-        text = response.content[0].text.strip()
+        text = response.text.strip()
         text = text.replace("```json", "").replace("```", "").strip()
         score_data = json.loads(text)
         return {**job, **score_data}
@@ -281,7 +283,7 @@ def write_to_notion(job, existing_urls):
 def main():
     print(f"\n=== Job Scout starting {datetime.today().strftime('%Y-%m-%d %H:%M')} ===\n")
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     # Get existing Notion URLs to avoid duplicates
     existing_urls = get_existing_urls()

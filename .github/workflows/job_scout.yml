@@ -1,0 +1,26 @@
+name: Job Scout
+
+on:
+  schedule:
+    - cron: "0 8 * * 1-5"  # Runs weekdays at 8am GMT
+  workflow_dispatch:         # Manual trigger
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Job Scout
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: python job_scout.py
