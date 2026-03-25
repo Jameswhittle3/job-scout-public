@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import time
 import requests
 from datetime import datetime
 from google import genai
@@ -190,23 +191,29 @@ Company: {job.get('company', 'Unknown')}
 Location: {job.get('location', 'Unknown')}
 Description: {description}"""
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-lite",
-            contents=prompt,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=400,
-            ),
-        )
-        text = response.text.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        score_data = json.loads(text)
-        return {**job, **score_data}
-    except Exception as e:
-        print(f"Scoring failed for {job.get('title')}: {e}")
-        return {**job, "score": 0, "fit_reason": "Scoring error", 
-                "keyword_gaps": [], "mech_eng_asset": False, "exp_is_hard_block": False}
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.1-flash-lite-preview",
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    max_output_tokens=400,
+                ),
+            )
+            text = response.text.strip()
+            text = text.replace("```json", "").replace("```", "").strip()
+            score_data = json.loads(text)
+            time.sleep(1)  # Respect rate limits
+            return {**job, **score_data}
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                print(f"Rate limited, waiting 10s before retry...")
+                time.sleep(10)
+                continue
+            print(f"Scoring failed for {job.get('title')}: {e}")
+            return {**job, "score": 0, "fit_reason": "Scoring error", 
+                    "keyword_gaps": [], "mech_eng_asset": False, "exp_is_hard_block": False}
 
 # ── Step 5: Write to Notion ─────────────────────────────────────────────────────
 
