@@ -13,7 +13,7 @@ NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 
 # Minimum score to write a role into your Applications database as Priority
-PRIORITY_THRESHOLD = 8
+PRIORITY_THRESHOLD = 7
 
 # Minimum score to write a role into Applications at all
 # Roles scoring between REVIEW_THRESHOLD and PRIORITY_THRESHOLD go in as non-priority
@@ -21,7 +21,7 @@ PRIORITY_THRESHOLD = 8
 REVIEW_THRESHOLD = 5
 
 # How many hours back to look for new postings
-HOURS_OLD = 24
+HOURS_OLD = 48
 
 # How many raw results to pull from job sites before filtering
 RESULTS_PER_SITE = 30
@@ -178,7 +178,7 @@ def hard_filter(jobs):
     print(f"After hard filter: {len(filtered)} roles remaining")
     return filtered
 
-# ── Step 4: Score with Claude ───────────────────────────────────────────────────
+# ── Step 4: Score with Gemini ───────────────────────────────────────────────────
 
 def score_job(client, job):
     """Send a single JD to Gemini for scoring. Returns the job dict with score added."""
