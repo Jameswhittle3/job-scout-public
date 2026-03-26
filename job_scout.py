@@ -13,13 +13,11 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 NOTION_API_KEY = os.environ["NOTION_API_KEY"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 
-# Minimum score to write a role into your Applications database as Priority
-PRIORITY_THRESHOLD = 7
+# Top N jobs from the Pool to promote to "Apply" each run
+DAILY_APPLY_LIMIT = 4
 
-# Minimum score to write a role into Applications at all
-# Roles scoring between REVIEW_THRESHOLD and PRIORITY_THRESHOLD go in as non-priority
-# for you to manually review once a week
-REVIEW_THRESHOLD = 5
+# Minimum score to write a role into the Pool at all
+REVIEW_THRESHOLD = 8
 
 # How many hours back to look for new postings
 HOURS_OLD = 48
@@ -41,60 +39,10 @@ SEARCH_TERMS = [
 ]
 
 # ── System prompt ───────────────────────────────────────────────────────────────
-# Paste the full text from your Candidate Profile page here
-# This is read once at startup, not fetched from Notion every run
 
-SYSTEM_PROMPT = """
-You are a specialist job scout. Your task is to assess whether a job posting is a strong fit for the following candidate. Read this profile carefully before evaluating any role.
-
-Who the candidate is:
-Recent mechanical engineering graduate with a 14-month placement year at Knorr-Bremse in test and validation. Has independently built working AI-powered applications. Passionate about AI as a field, not just as a tool. Not a CS graduate but practically capable — comfortable with Python, APIs, and building with LLMs. Currently seeking a first full-time role after graduation.
-
-Target roles:
-The candidate is open to a variety of early-career roles at the intersection of AI and engineering. Any of the following are a strong fit:
-- AI solutions engineering or implementation engineering
-- Forward deployed engineering — embedded technical work directly with clients or end users
-- AI agent development or applied AI engineering
-- Roles intersecting physical engineering and AI — predictive maintenance, digital twins, simulation, industrial AI, robotics, autonomous systems
-- Any niche early-career role where an engineering background is explicitly valued over a pure CS background
-
-Why the background is an asset:
-Mechanical engineers bring systems thinking, comfort with physical constraints, cross-disciplinary problem solving, and experience with test, validation, and real-world deployment that pure CS graduates typically lack. The placement year at Knorr-Bremse demonstrates applied engineering rigour in a regulated industrial environment. The independent AI projects demonstrate self-driven capability and genuine passion for the field beyond formal education.
-
-Hard filters — do not recommend these:
-- Roles with a hard stated minimum of 3 or more years of experience
-- Senior, lead, principal, staff, head of, director, or management roles
-- Pure software engineering roles with no AI, implementation, or physical engineering angle
-- Roles at non-AI companies where AI is clearly peripheral to the core business
-
-Soft negative bias — lower score but do not automatically exclude:
-- Roles that explicitly require a CS degree as a stated requirement
-- Roles that are purely research-oriented with no applied or implementation component
-- Large enterprise or consulting firms with generic rotational graduate programmes
-
-Preferences — these increase the score:
-- Early-stage AI-native companies, typically 20–200 employees
-- Product-led companies building AI products
-- London-based or remote UK
-- Roles where the JD explicitly mentions engineering background, physical systems, or domain expertise as valuable
-- Any mention of mechanical, electrical, or physical engineering knowledge in the JD
-- Roles involving direct customer or end-user contact on technical work
-
-Scoring guide — score each role from 1 to 10:
-- 9–10: Strong fit. Role explicitly values engineering background, involves AI implementation or applied work, early-career friendly, company is AI-native
-- 7–8: Good fit. Role is clearly in the right space, experience requirement is flexible, background is plausible advantage
-- 5–6: Possible. Role is adjacent but not perfectly shaped, or has one soft negative factor
-- Below 5: Poor fit
-
-Return ONLY valid JSON. No preamble, no markdown fences. Exactly this structure:
-{
-  "score": <integer 1-10>,
-  "fit_reason": "<max 2 sentences explaining the score>",
-  "keyword_gaps": ["<up to 5 skills in the JD you may need to surface>"],
-  "mech_eng_asset": <true or false>,
-  "exp_is_hard_block": <true or false>
-}
-"""
+PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompt.txt")
+with open(PROMPT_PATH, "r", encoding="utf-8") as f:
+    SYSTEM_PROMPT = f.read()
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -251,7 +199,7 @@ Description: {description}"""
 # ── Step 5: Write to Notion ─────────────────────────────────────────────────────
 
 def write_to_notion(job, existing_urls, existing_fingerprints):
-    """Write a single job to the Notion Applications database."""
+    """Write a single job to the Notion Applications database as a Pool entry."""
     job_url = str(job.get("job_url", ""))
     fp = make_fingerprint(job.get("company", ""), job.get("title", ""))
 
@@ -264,7 +212,6 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
         return False
 
     score = job.get("score", 0)
-    is_priority = score >= PRIORITY_THRESHOLD
 
     gaps = job.get("keyword_gaps", [])
     gaps_str = ", ".join(gaps) if gaps else "None identified"
@@ -276,10 +223,6 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
         f"Found: {datetime.today().strftime('%Y-%m-%d')}"
     )
 
-    # Only write to safe fields — Company (title), Job Description (text),
-    # Posting URL (url), notes (text), Priority (checkbox)
-    # Stage and Position are left for you to fill in manually
-    # to avoid format errors with fixed option lists
     properties = {
         "Company": {
             "title": [{"text": {"content": str(job.get("company", "Unknown"))}}]
@@ -287,11 +230,14 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
         "Job Description": {
             "rich_text": [{"text": {"content": str(job.get("description", ""))[:2000]}}]
         },
-        "notes": {
+        "ai-notes": {
             "rich_text": [{"text": {"content": notes}}]
         },
-        "Priority": {
-            "checkbox": is_priority
+        "Score": {
+            "number": score
+        },
+        "Stage": {
+            "select": {"name": "Pool"}
         }
     }
 
@@ -316,11 +262,68 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
     )
 
     if response.status_code == 200:
-        print(f"✓ Written to Notion: {job.get('title')} at {job.get('company')} — Score {score}/10")
+        print(f"✓ Written to Pool: {job.get('title')} at {job.get('company')} — Score {score}/10")
         return True
     else:
         print(f"✗ Notion write failed for {job.get('title')}: {response.status_code} {response.text}")
         return False
+
+# ── Step 6: Promote top Pool entries to Apply ───────────────────────────────────
+
+def promote_top_apply():
+    """Query all Pool entries, promote the top DAILY_APPLY_LIMIT by score to Apply."""
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+
+    # Only fetch Pool entries, sorted by Score descending
+    body = {
+        "filter": {
+            "property": "Stage",
+            "select": {"equals": "Pool"}
+        },
+        "sorts": [
+            {"property": "Score", "direction": "descending"}
+        ],
+        "page_size": DAILY_APPLY_LIMIT
+    }
+
+    response = requests.post(url, headers=headers, json=body)
+    data = response.json()
+    pages = data.get("results", [])
+
+    if not pages:
+        print("No Pool entries to promote.")
+        return
+
+    promoted = 0
+    for page in pages:
+        page_id = page["id"]
+        props = page.get("properties", {})
+        company_parts = props.get("Company", {}).get("title", [])
+        company = company_parts[0]["text"]["content"] if company_parts else "Unknown"
+        score_val = props.get("Score", {}).get("number", 0)
+
+        patch_resp = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers=headers,
+            json={
+                "properties": {
+                    "Stage": {"select": {"name": "Apply"}}
+                }
+            }
+        )
+
+        if patch_resp.status_code == 200:
+            print(f"↑ Promoted to Apply: {company} — Score {score_val}/10")
+            promoted += 1
+        else:
+            print(f"✗ Failed to promote {company}: {patch_resp.status_code} {patch_resp.text}")
+
+    print(f"Promoted {promoted} roles from Pool to Apply")
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
@@ -337,30 +340,34 @@ def main():
     filtered_jobs = hard_filter(raw_jobs)
 
     if not filtered_jobs:
-        print("No jobs passed the hard filter today. Exiting.")
-        return
+        print("No jobs passed the hard filter today.")
+    else:
+        # Score each job and collect results
+        scored = []
+        for i, job in enumerate(filtered_jobs):
+            print(f"Scoring {i+1}/{len(filtered_jobs)}: {job.get('title')} at {job.get('company')}")
+            scored.append(score_job(client, job))
 
-    # Score each job and collect results
-    scored = []
-    for i, job in enumerate(filtered_jobs):
-        print(f"Scoring {i+1}/{len(filtered_jobs)}: {job.get('title')} at {job.get('company')}")
-        scored.append(score_job(client, job))
+        # Sort by score descending
+        scored.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-    # Sort by score descending
-    scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+        # Write qualifying roles to Notion as Pool entries
+        written = 0
+        for job in scored:
+            if job.get("score", 0) >= REVIEW_THRESHOLD:
+                success = write_to_notion(job, existing_urls, existing_fingerprints)
+                if success:
+                    written += 1
+                    existing_urls.add(str(job.get("job_url", "")))
+                    existing_fingerprints.add(make_fingerprint(job.get("company", ""), job.get("title", "")))
 
-    # Write qualifying roles to Notion
-    written = 0
-    for job in scored:
-        score = job.get("score", 0)
-        if score >= REVIEW_THRESHOLD:
-            success = write_to_notion(job, existing_urls, existing_fingerprints)
-            if success:
-                written += 1
-                existing_urls.add(str(job.get("job_url", "")))
-                existing_fingerprints.add(make_fingerprint(job.get("company", ""), job.get("title", "")))
+        print(f"\n{written} new roles added to Pool.\n")
 
-    print(f"\n=== Run complete. {written} new roles added to Notion. ===\n")
+    # Promote the top 4 from the entire Pool (new + carryover)
+    print("── Promoting top roles to Apply ──")
+    promote_top_apply()
+
+    print(f"\n=== Run complete. ===\n")
 
 if __name__ == "__main__":
     main()
