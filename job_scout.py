@@ -96,10 +96,17 @@ Return ONLY valid JSON. No preamble, no markdown fences. Exactly this structure:
 }
 """
 
-# ── Step 1: Fetch existing Notion URLs to avoid duplicates ──────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 
-def get_existing_urls():
-    """Fetch all posting URLs already in the Notion database to prevent duplicates."""
+def make_fingerprint(company, title):
+    """Create a normalized hash from company + title to catch duplicates across sites."""
+    key = f"{str(company).lower().strip()}|{str(title).lower().strip()}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+# ── Step 1: Fetch existing Notion entries to avoid duplicates ───────────────────
+
+def get_existing_entries():
+    """Fetch all posting URLs and company+title fingerprints from Notion."""
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -107,6 +114,7 @@ def get_existing_urls():
         "Content-Type": "application/json"
     }
     existing_urls = set()
+    existing_fingerprints = set()
     has_more = True
     start_cursor = None
 
@@ -121,11 +129,22 @@ def get_existing_urls():
             posting_url = props.get("Posting URL", {}).get("url")
             if posting_url:
                 existing_urls.add(posting_url)
+            company_parts = props.get("Company", {}).get("title", [])
+            company = company_parts[0]["text"]["content"] if company_parts else ""
+            position_prop = props.get("Position", {})
+            title = ""
+            if "rich_text" in position_prop:
+                title_parts = position_prop.get("rich_text", [])
+                title = title_parts[0]["text"]["content"] if title_parts else ""
+            elif "select" in position_prop:
+                title = (position_prop.get("select") or {}).get("name", "")
+            if company:
+                existing_fingerprints.add(make_fingerprint(company, title))
         has_more = data.get("has_more", False)
         start_cursor = data.get("next_cursor")
 
-    print(f"Found {len(existing_urls)} existing URLs in Notion")
-    return existing_urls
+    print(f"Found {len(existing_urls)} existing URLs and {len(existing_fingerprints)} fingerprints in Notion")
+    return existing_urls, existing_fingerprints
 
 # ── Step 2: Scrape jobs ─────────────────────────────────────────────────────────
 
@@ -133,6 +152,7 @@ def fetch_jobs():
     """Fetch raw job results from Indeed, LinkedIn, and Google Jobs."""
     all_jobs = []
     seen_urls = set()
+    seen_fingerprints = set()
 
     for term in SEARCH_TERMS:
         print(f"Searching: {term}")
@@ -148,8 +168,10 @@ def fetch_jobs():
             jobs = jobs.fillna("")
             for _, row in jobs.iterrows():
                 url = str(row.get("job_url", ""))
-                if url and url not in seen_urls:
+                fp = make_fingerprint(row.get("company", ""), row.get("title", ""))
+                if url and url not in seen_urls and fp not in seen_fingerprints:
                     seen_urls.add(url)
+                    seen_fingerprints.add(fp)
                     all_jobs.append(row.to_dict())
         except Exception as e:
             print(f"Search failed for '{term}': {e}")
@@ -163,16 +185,27 @@ def hard_filter(jobs):
     """Remove obvious non-fits by title before spending any API credits."""
     EXCLUDE_TITLE = ["senior", "lead", "principal", "staff", "head of",
                      "director", "manager", "vp ", "vice president", "cto", "ceo"]
-    EXCLUDE_DESC  = ["minimum 5 years", "minimum 4 years", "at least 5 years",
-                     "at least 4 years", "10+ years", "8+ years", "7+ years"]
+    EXCLUDE_DESC  = ["minimum 5 years", "minimum 4 years", "minimum 3 years",
+                     "at least 5 years", "at least 4 years", "at least 3 years",
+                     "10+ years", "8+ years", "7+ years", "6+ years",
+                     "5+ years", "4+ years", "3+ years",
+                     "3-5 years", "4-6 years", "5-7 years", "5-10 years",
+                     "3 years experience", "4 years experience", "5 years experience",
+                     "3 years of experience", "4 years of experience", "5 years of experience"]
+
+    EXCLUDE_SENIORITY = ["mid-senior", "senior", "director", "executive"]
+    ALLOW_SENIORITY = ["entry", "intern", "associate", ""]
 
     filtered = []
     for job in jobs:
         title = str(job.get("title", "")).lower()
         desc  = str(job.get("description", "")).lower()
+        seniority = str(job.get("job_level", "")).lower().strip()
         if any(t in title for t in EXCLUDE_TITLE):
             continue
         if any(d in desc for d in EXCLUDE_DESC):
+            continue
+        if seniority and not any(s in seniority for s in ALLOW_SENIORITY):
             continue
         filtered.append(job)
 
@@ -217,13 +250,17 @@ Description: {description}"""
 
 # ── Step 5: Write to Notion ─────────────────────────────────────────────────────
 
-def write_to_notion(job, existing_urls):
+def write_to_notion(job, existing_urls, existing_fingerprints):
     """Write a single job to the Notion Applications database."""
     job_url = str(job.get("job_url", ""))
+    fp = make_fingerprint(job.get("company", ""), job.get("title", ""))
 
-    # Skip if already in Notion
+    # Skip if URL or company+title already in Notion
     if job_url and job_url in existing_urls:
-        print(f"Skipping duplicate: {job.get('title')} at {job.get('company')}")
+        print(f"Skipping duplicate (URL match): {job.get('title')} at {job.get('company')}")
+        return False
+    if fp in existing_fingerprints:
+        print(f"Skipping duplicate (company+title match): {job.get('title')} at {job.get('company')}")
         return False
 
     score = job.get("score", 0)
@@ -292,8 +329,8 @@ def main():
 
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # Get existing Notion URLs to avoid duplicates
-    existing_urls = get_existing_urls()
+    # Get existing Notion entries to avoid duplicates
+    existing_urls, existing_fingerprints = get_existing_entries()
 
     # Fetch and filter jobs
     raw_jobs = fetch_jobs()
@@ -317,10 +354,11 @@ def main():
     for job in scored:
         score = job.get("score", 0)
         if score >= REVIEW_THRESHOLD:
-            success = write_to_notion(job, existing_urls)
+            success = write_to_notion(job, existing_urls, existing_fingerprints)
             if success:
                 written += 1
                 existing_urls.add(str(job.get("job_url", "")))
+                existing_fingerprints.add(make_fingerprint(job.get("company", ""), job.get("title", "")))
 
     print(f"\n=== Run complete. {written} new roles added to Notion. ===\n")
 
