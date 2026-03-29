@@ -9,34 +9,27 @@ from jobspy import scrape_jobs
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-NOTION_API_KEY = os.environ["NOTION_API_KEY"]
-NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+import config  # Import your new modular settings
 
-# Top N jobs from the Pool to promote to "Apply" each run
-DAILY_APPLY_LIMIT = 4
+# Update your variables to reference the config file
+GEMINI_API_KEY = config.GEMINI_API_KEY
+NOTION_API_KEY = config.NOTION_API_KEY
+NOTION_DATABASE_ID = config.NOTION_DATABASE_ID
 
-# Minimum score to write a role into the Pool at all
-REVIEW_THRESHOLD = 8
+# Update fetch_jobs to use config.LOCATION and config.SEARCH_TERMS
+def fetch_jobs():
+    for term in config.SEARCH_TERMS:
+        jobs = scrape_jobs(
+            location=config.LOCATION,
+            # ... other params ...
+        )
 
-# How many hours back to look for new postings
-HOURS_OLD = 48
-
-# How many raw results to pull from job sites before filtering
-RESULTS_PER_SITE = 30
-
-# Job title search terms — broad enough to catch niche roles
-SEARCH_TERMS = [
-    "AI solutions engineer",
-    "implementation engineer AI",
-    "forward deployed engineer",
-    "applied AI engineer",
-    "AI agent developer",
-    "AI engineer graduate",
-    "solutions engineer machine learning",
-    "digital twin engineer",
-    "industrial AI engineer"
-]
+# Update hard_filter to use the config lists
+def hard_filter(jobs):
+    for job in jobs:
+        if any(t in title for t in config.EXCLUDE_TITLE_KEYWORDS):
+            continue
+        # ... and so on ...
 
 # ── System prompt ───────────────────────────────────────────────────────────────
 
@@ -211,8 +204,13 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
         print(f"Skipping duplicate (company+title match): {job.get('title')} at {job.get('company')}")
         return False
 
-    score = job.get("score", 0)
+    raw_title = str(job.get("title", "Unknown")).strip()
+    formatted_title = " ".join(
+        [word.upper() if word.lower() == "ai" else word.capitalize() 
+         for word in raw_title.split()]
+    )
 
+    score = job.get("score", 0)
     gaps = job.get("keyword_gaps", [])
     gaps_str = ", ".join(gaps) if gaps else "None identified"
     mech_asset = "Yes" if job.get("mech_eng_asset") else "No"
@@ -226,6 +224,9 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
     properties = {
         "Company": {
             "title": [{"text": {"content": str(job.get("company", "Unknown"))}}]
+        },
+        "Position": {
+            "select": {"name": formatted_title}
         },
         "Job Description": {
             "rich_text": [{"text": {"content": str(job.get("description", ""))[:2000]}}]
@@ -262,12 +263,12 @@ def write_to_notion(job, existing_urls, existing_fingerprints):
     )
 
     if response.status_code == 200:
-        print(f"✓ Written to Pool: {job.get('title')} at {job.get('company')} — Score {score}/10")
+        print(f"✓ Written to Pool: {formatted_title} at {job.get('company')} — Score {score}/10")
         return True
     else:
         print(f"✗ Notion write failed for {job.get('title')}: {response.status_code} {response.text}")
         return False
-
+    
 # ── Step 6: Promote top Pool entries to Apply ───────────────────────────────────
 
 def promote_top_apply():

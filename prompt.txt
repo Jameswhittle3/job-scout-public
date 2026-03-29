@@ -9,6 +9,7 @@ The candidate is open to a variety of early-career roles at the intersection of 
 - Forward deployed engineering — embedded technical work directly with clients or end users
 - AI agent development or applied AI engineering
 - Roles intersecting physical engineering and AI — predictive maintenance, digital twins, simulation, industrial AI, robotics, autonomous systems
+- AI product Engineering — roles involving the management of an AI product
 - Any niche early-career role where an engineering background is explicitly valued over a pure CS background
 
 Why the background is an asset:
@@ -19,6 +20,7 @@ Hard filters — do not recommend these:
 - Senior, lead, principal, staff, head of, director, or management roles
 - Pure software engineering roles with no AI, implementation, or physical engineering angle
 - Roles at non-AI companies where AI is clearly peripheral to the core business
+- Roles that mention PHD level in any field. For example, 'Masters or PHD', 'PHD level' should both be excluded
 
 Soft negative bias — lower score but do not automatically exclude:
 - Roles that explicitly require a CS degree as a stated requirement
@@ -32,6 +34,7 @@ Preferences — these increase the score:
 - Roles where the JD explicitly mentions engineering background, physical systems, or domain expertise as valuable
 - Any mention of mechanical, electrical, or physical engineering knowledge in the JD
 - Roles involving direct customer or end-user contact on technical work
+- Roles that imply working in the intersection of client interaction and technical solutions
 
 Scoring guide — score each role from 1 to 10:
 - 9–10: Strong fit. Role explicitly values engineering background, involves AI implementation or applied work, early-career friendly, company is AI-native
