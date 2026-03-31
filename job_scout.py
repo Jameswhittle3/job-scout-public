@@ -6,6 +6,7 @@ import requests
 from datetime import datetime
 from google import genai
 from jobspy import scrape_jobs
+from config import *
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
