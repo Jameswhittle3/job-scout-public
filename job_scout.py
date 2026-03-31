@@ -123,31 +123,41 @@ def fetch_jobs():
 # ── Step 3: Hard filter ─────────────────────────────────────────────────────────
 
 def hard_filter(jobs):
-    """Remove obvious non-fits by title before spending any API credits."""
+    """Remove obvious non-fits by title and description before spending API credits."""
+    import re  # Added to allow pattern matching
+
     EXCLUDE_TITLE = ["senior", "lead", "principal", "staff", "head of",
                      "director", "manager", "vp ", "vice president", "cto", "ceo"]
-    EXCLUDE_DESC  = ["minimum 5 years", "minimum 4 years", "minimum 3 years",
-                     "at least 5 years", "at least 4 years", "at least 3 years",
-                     "10+ years", "8+ years", "7+ years", "6+ years",
-                     "5+ years", "4+ years", "3+ years",
-                     "3-5 years", "4-6 years", "5-7 years", "5-10 years",
-                     "3 years experience", "4 years experience", "5 years experience",
-                     "3 years of experience", "4 years of experience", "5 years of experience"]
 
-    EXCLUDE_SENIORITY = ["mid-senior", "senior", "director", "executive"]
+    # This regex catches variations like: "5+ years", "3-5 yrs", "minimum 4 years"
+    # It automatically ignores bullet points, extra spaces, and capitalization.
+    exp_pattern = re.compile(
+        r'(?:[3-9]|1[0-9])\s*\+\s*(?:years?|yrs?)|'                     # Matches "3+ years", "10 + yrs"
+        r'(?:minimum|at least)\s+(?:of\s+)?(?:[3-9]|1[0-9])\s+(?:years?|yrs?)|' # Matches "minimum 5 years"
+        r'(?:[3-9]|1[0-9])\s*(?:-|to)\s*\d+\s*(?:years?|yrs?)',         # Matches "3-5 years"
+        re.IGNORECASE
+    )
+
     ALLOW_SENIORITY = ["entry", "intern", "associate", ""]
 
     filtered = []
     for job in jobs:
         title = str(job.get("title", "")).lower()
-        desc  = str(job.get("description", "")).lower()
+        desc  = str(job.get("description", ""))
         seniority = str(job.get("job_level", "")).lower().strip()
+
+        # 1. Kill by Title
         if any(t in title for t in EXCLUDE_TITLE):
             continue
-        if any(d in desc for d in EXCLUDE_DESC):
+
+        # 2. Kill by Regex Experience Match in Description
+        if exp_pattern.search(desc):
             continue
+
+        # 3. Kill by explicit Seniority level (if provided by scraper)
         if seniority and not any(s in seniority for s in ALLOW_SENIORITY):
             continue
+
         filtered.append(job)
 
     print(f"After hard filter: {len(filtered)} roles remaining")
@@ -355,12 +365,19 @@ def main():
         # Write qualifying roles to Notion as Pool entries
         written = 0
         for job in scored:
-            if job.get("score", 0) >= REVIEW_THRESHOLD:
+            # FIX: Check if the score is high enough AND ensure it's not a hard block
+            is_good_score = job.get("score", 0) >= REVIEW_THRESHOLD
+            is_not_blocked = not job.get("exp_is_hard_block", False)
+
+            if is_good_score and is_not_blocked:
                 success = write_to_notion(job, existing_urls, existing_fingerprints)
                 if success:
                     written += 1
                     existing_urls.add(str(job.get("job_url", "")))
                     existing_fingerprints.add(make_fingerprint(job.get("company", ""), job.get("title", "")))
+            elif is_good_score and not is_not_blocked:
+                # Optional: Print why it was rejected despite a good score
+                print(f"Blocked by AI Experience Filter: {job.get('title')} at {job.get('company')}")
 
         print(f"\n{written} new roles added to Pool.\n")
 
