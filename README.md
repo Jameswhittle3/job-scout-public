@@ -1,42 +1,136 @@
-# AI Job Scout Automation
+# Job Scout
 
-An automated pipeline that scrapes job postings from major platforms, evaluates their fit against a specific candidate profile using Google Gemini, and pushes the best matches into a Notion database for review.
+An automated job scouting pipeline that scrapes job postings, scores them with AI, and writes the best matches to a Notion database — running daily via GitHub Actions.
 
-## Overview
+## How It Works
 
-1. **Scraping:** Fetches recent job postings from Indeed, LinkedIn, and Google Jobs based on custom search terms using `python-jobspy`.
-2. **Hard Filtering:** Discards roles matching exclusion keywords (e.g., "Senior", "10+ years") to save on API processing time.
-3. **AI Scoring:** Sends the surviving job descriptions to Google Gemini. The model scores the role out of 10 based on how well it aligns with the candidate's background as defined in the prompt.
-4. **Notion Integration:** Roles that meet a minimum score threshold are formatted and injected directly into a Notion database.
-5. **Promotion:** The system automatically tags a daily quota of the highest-scoring jobs to an "Apply" stage.
+```
+Scrape (Indeed, LinkedIn, Google Jobs)
+  → Hard Filter (title, experience, seniority level)
+    → AI Score (Gemini rates each role 1-10 against your profile)
+      → Write to Notion (qualifying jobs enter the Pool)
+        → Promote (top 4 from Pool move to Apply each day)
+```
 
-## Prerequisites
+1. **Scrape** — Searches multiple job boards using your configured search terms and location.
+2. **Hard Filter** — Removes obvious non-fits by title keywords (e.g. "senior", "director"), experience phrases in descriptions (e.g. "5+ years"), and LinkedIn seniority tags (e.g. "mid-senior level").
+3. **Deduplicate** — Uses URL matching and company+title fingerprinting to prevent the same role appearing twice, even across different job boards.
+4. **AI Score** — Sends each surviving job to Gemini with a customisable system prompt describing your background, target roles, and preferences. Returns a 1-10 score with reasoning.
+5. **Write to Notion** — Jobs scoring above the threshold (default: 8/10) are written to your Notion database with Stage set to "Pool".
+6. **Promote** — After writing, the script queries all Pool entries and promotes the top N (default: 4) by score to "Apply". Lower-scoring jobs carry over and compete with tomorrow's results.
 
-To run this project, you will need:
-* **Python 3.12+**
-* A **Google Gemini API Key**
-* A **Notion Integration Secret** (API Key)
-* A **Notion Database ID** *Note: The Notion database must have the following properties configured: `Company` (Title), `Position` (Select), `Job Description` (Rich Text), `ai-notes` (Rich Text), `Score` (Number), `Stage` (Select), and `Posting URL` (URL).*
+## Setup
 
-## Configuration
+### Prerequisites
 
-The scout is modular and can be adapted by editing the following files:
+- Python 3.12+
+- A [Notion integration](https://www.notion.so/my-integrations) with access to your database
+- A [Gemini API key](https://aistudio.google.com/apikey)
+- A GitHub account (for automated scheduling)
 
-### 1. prompt.txt
-This file dictates how Gemini evaluates the jobs. Update this text file to reflect the candidate's actual background, goals, and hard filters. The prompt requires the output to be strictly valid JSON without preamble; leave the JSON formatting instructions intact at the bottom of the file.
+### 1. Notion Database
 
-### 2. job_scout.py
-At the top of the script, you can adjust the search limits and logic thresholds:
-* `DAILY_APPLY_LIMIT`: Number of top jobs promoted from the "Pool" to "Apply" each day (default: 4).
-* `REVIEW_THRESHOLD`: The minimum score out of 10 a job needs to be saved to Notion (default: 8).
-* `SEARCH_TERMS`: The job titles to scrape.
-* `EXCLUDE_TITLE` & `EXCLUDE_DESC`: Lists inside the `hard_filter` function to instantly filter out bad matches before API scoring.
+Create a Notion database with these properties:
 
-## Local Setup
+| Property | Type | Purpose |
+|---|---|---|
+| Company | Title | Company name |
+| Position | Select | Job title |
+| Posting URL | URL | Link to the job listing |
+| Job Description | Rich text | Truncated JD (first 2000 chars) |
+| ai-notes | Rich text | AI scoring details and reasoning |
+| Score | Number | AI-assigned score (1-10) |
+| Stage | Select | Options: `Pool`, `Apply`, `Applied`, `Rejected` (script only uses Pool and Apply) |
 
-To test the script on your local machine:
+Share the database with your Notion integration.
 
-1. Clone the repository.
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
+### 2. Clone and Configure
+
+```bash
+git clone https://github.com/your-username/job-scout.git
+cd job-scout
+pip install -r requirements.txt
+```
+
+### 3. Environment Variables
+
+Set these as environment variables locally (or as GitHub Secrets for CI):
+
+```
+GEMINI_API_KEY=your-gemini-api-key
+NOTION_API_KEY=your-notion-integration-token
+NOTION_DATABASE_ID=your-notion-database-id
+```
+
+### 4. Customise
+
+#### `config.py` — Search and filter settings
+
+```python
+LOCATION = "London, UK"          # Your target location
+REVIEW_THRESHOLD = 8             # Minimum score to enter Pool (1-10)
+DAILY_APPLY_LIMIT = 4            # How many Pool jobs get promoted to Apply each run
+
+SEARCH_TERMS = [                 # Job title search queries
+    "AI solutions engineer",
+    "applied AI engineer",
+    # Add your own...
+]
+
+EXCLUDE_TITLE_KEYWORDS = [       # Titles containing these are skipped
+    "senior", "lead", "director",
+    # Add your own...
+]
+```
+
+#### `prompt.txt` — AI scoring prompt
+
+This is the system prompt sent to Gemini for every job. It contains:
+
+- **Who the candidate is** — Your background, degree, experience
+- **Target roles** — What types of roles you're looking for
+- **Why the background is an asset** — What makes you a differentiator
+- **Hard filters** — What the AI should reject outright (e.g. 2+ years experience required)
+- **Soft negatives** — What should lower the score but not auto-reject
+- **Preferences** — What should increase the score
+- **Scoring guide** — How to assign 1-10
+
+Each section has `<!-- CUSTOMISE -->` comments with examples. Replace the examples with your own details.
+
+### 5. Run
+
+#### Locally
+```bash
+python job_scout.py
+```
+
+#### Automated (GitHub Actions)
+The included workflow (`.github/workflows/job_scout.yml`) runs weekdays at 8am GMT. Add your three environment variables as [GitHub Secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets) and push to trigger.
+
+## Architecture
+
+```
+job_scout.py      — Main pipeline (scrape → filter → score → write → promote)
+config.py         — All tuneable settings (search terms, thresholds, filters)
+prompt.txt        — AI system prompt (your profile, scoring criteria)
+requirements.txt  — Python dependencies
+.github/workflows/job_scout.yml — GitHub Actions cron schedule
+```
+
+## How the Pool/Apply System Works
+
+- Every new qualifying job enters as **Pool**.
+- After writing, the script queries **all** Pool entries (new + carryover from previous days) and promotes the **top 4 by score** to **Apply**.
+- If today's jobs are weaker than yesterday's leftovers, the older higher-scoring jobs get promoted instead.
+- The script never touches entries in Applied, Rejected, or any other stage — those are for you to manage manually.
+
+## Dependencies
+
+- [python-jobspy](https://github.com/Bunsly/JobSpy) — Multi-site job scraping
+- [google-genai](https://github.com/googleapis/python-genai) — Gemini API client
+- [requests](https://docs.python-requests.org/) — Notion API calls
+- [pandas](https://pandas.pydata.org/) — Data handling
+
+## License
+
+MIT
