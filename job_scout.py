@@ -105,7 +105,8 @@ def fetch_jobs():
                 location="London, UK",
                 results_wanted=RESULTS_PER_SITE,
                 hours_old=HOURS_OLD,
-                country_indeed="UK"
+                country_indeed="UK",
+                linkedin_fetch_description=True
             )
             jobs = jobs.fillna("")
             for _, row in jobs.iterrows():
