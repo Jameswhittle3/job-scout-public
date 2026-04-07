@@ -140,7 +140,7 @@ def hard_filter(jobs):
         re.IGNORECASE
     )
 
-    ALLOW_SENIORITY = ["entry", "intern", "associate", ""]
+    ALLOW_SENIORITY = ["entry", "intern", "associate"]
 
     filtered = []
     for job in jobs:
@@ -157,8 +157,9 @@ def hard_filter(jobs):
             continue
 
         # 3. Kill by explicit Seniority level (if provided by scraper)
-        if seniority and not any(s in seniority for s in ALLOW_SENIORITY):
-            continue
+        if seniority and seniority != "not applicable":
+            if not any(s in seniority for s in ALLOW_SENIORITY):
+                continue
 
         filtered.append(job)
 
