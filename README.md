@@ -1,6 +1,7 @@
 # Job Scout
 
 An automated job scouting pipeline that scrapes job postings, scores them with AI, and writes the best matches to a Notion database — running daily via GitHub Actions.
+Built using Python and GitHub Copilot. Advice is to use GitHub secrets to manage API keys.
 
 ## How It Works
 
